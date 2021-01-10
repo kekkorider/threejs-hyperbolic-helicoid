@@ -1,17 +1,19 @@
-import { Scene } from 'three/src/scenes/Scene'
-import { WebGLRenderer } from 'three/src/renderers/WebGLRenderer'
-import { PerspectiveCamera } from 'three/src/cameras/PerspectiveCamera'
-import { BoxBufferGeometry } from 'three/src/geometries/BoxBufferGeometry'
-import { MeshStandardMaterial } from 'three/src/materials/MeshStandardMaterial'
-import { ShaderMaterial } from 'three/src/materials/ShaderMaterial'
-import { Mesh } from 'three/src/objects/Mesh'
-import { PointLight } from 'three/src/lights/PointLight'
-import { Color } from 'three/src/math/Color'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
+import {
+  Scene,
+  WebGLRenderer,
+  PerspectiveCamera,
+  IcosahedronBufferGeometry,
+  ParametricBufferGeometry,
+  MeshPhysicalMaterial,
+  Mesh,
+  AmbientLight,
+  DirectionalLight,
+  Color,
+  Vector3,
+  Clock
+} from 'three'
 
-// Remove this if you don't need to load any 3D model
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 
 import Tweakpane from 'tweakpane'
 
@@ -26,19 +28,20 @@ class App {
     this._createScene()
     this._createCamera()
     this._createRenderer()
-    this._createBox()
-    this._createShadedBox()
+    this._createHelicoid()
+    this._createSpheres()
     this._createLight()
+    this._createClock()
     this._addListeners()
     this._createControls()
     this._createDebugPanel()
 
-    this._loadModel().then(() => {
-      this.renderer.setAnimationLoop(() => {
-        this._update()
-        this._render()
-      })
+    this.renderer.setAnimationLoop(() => {
+      this._update()
+      this._render()
     })
+
+    console.log(this)
   }
 
   destroy() {
@@ -47,11 +50,23 @@ class App {
   }
 
   _update() {
-    this.box.rotation.y += 0.01
-    this.box.rotation.z += 0.006
+    const t = this.clock.getElapsedTime()
+    this.helicoid.rotation.y = t
 
-    this.shadedBox.rotation.y += 0.01
-    this.shadedBox.rotation.z += 0.006
+    if (!!this.helicoid.material.userData.shader) {
+      this.helicoid.material.userData.shader.uniforms.playhead.value = t*0.5
+      this.ball1.material.userData.shader.uniforms.playhead.value = t*0.5
+      this.ball2.material.userData.shader.uniforms.playhead.value = t*0.5
+    }
+
+    const theta1 = t * 0.32 * Math.PI
+    const theta2 = t * 0.32 * Math.PI + Math.PI
+
+    this.ball1.position.x = 0.6 * Math.sin(theta1)
+    this.ball1.position.z = 0.6 * Math.cos(theta1)
+
+    this.ball2.position.x = 0.6 * Math.sin(theta2)
+    this.ball2.position.z = 0.6 * Math.cos(theta2)
   }
 
   _render() {
@@ -64,7 +79,7 @@ class App {
 
   _createCamera() {
     this.camera = new PerspectiveCamera(75, this.container.clientWidth / this.container.clientHeight, 0.1, 100)
-    this.camera.position.set(-4, 4, 10)
+    this.camera.position.set(0, 0, 3)
   }
 
   _createRenderer() {
@@ -78,93 +93,106 @@ class App {
     this.renderer.setSize(this.container.clientWidth, this.container.clientHeight)
     this.renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio))
     this.renderer.setClearColor(0x121212)
-    this.renderer.gammaOutput = true
+    this.renderer.shadowMap.enabled = true
+    this.renderer.shadowMap.type = 2 // THREE.PCFSoftShadowMap
     this.renderer.physicallyCorrectLights = true
   }
 
   _createLight() {
-    this.pointLight = new PointLight(0xff0055, 500, 100, 2)
-    this.pointLight.position.set(0, 10, 13)
-    this.scene.add(this.pointLight)
+    this.ambientLight = new AmbientLight(0xffffff, 4)
+    this.scene.add(this.ambientLight)
+
+    this.directionalLight = new DirectionalLight(0xffffff, 1)
+    this.directionalLight.position.set(0, 1, 1)
+    this.directionalLight.castShadow = true
+    this.directionalLight.shadow.mapSize.width = 2048
+    this.directionalLight.shadow.mapSize.height = 2048
+
+    this.directionalLight.shadow.camera.right = 2
+    this.directionalLight.shadow.camera.left = -2
+    this.directionalLight.shadow.camera.bottom = -2
+    this.directionalLight.shadow.camera.top = 2
+
+    // this.directionalLight.shadow.bias = 0.00001
+
+    this.scene.add(this.directionalLight)
   }
 
-  /**
-   * Create a box with a PBR material
-   */
-  _createBox() {
-    const geometry = new BoxBufferGeometry(1, 1, 1, 1, 1, 1)
-
-    const material = new MeshStandardMaterial({ color: 0xffffff })
-
-    this.box = new Mesh(geometry, material)
-
-    this.box.scale.x = 4
-    this.box.scale.y = 4
-    this.box.scale.z = 4
-
-    this.box.position.x = -5
-
-    this.scene.add(this.box)
-  }
-
-  /**
-   * Create a box with a custom ShaderMaterial
-   */
-  _createShadedBox() {
-    const geometry = new BoxBufferGeometry(1, 1, 1, 1, 1, 1)
-
-    const material = new ShaderMaterial({
-      vertexShader: require('./shaders/sample.vertex.glsl'),
-      fragmentShader: require('./shaders/sample.fragment.glsl'),
-      transparent: true
+  _getMaterial() {
+    const material = new MeshPhysicalMaterial({
+      color: 0xffffff,
+      metalness: 0.5,
+      roughness: 0,
+      clearcoat: 1,
+      clearcoatRoughness: 0.4,
+      wireframe: false,
+      side: 2 // THREE.DoubleSide
     })
 
-    this.shadedBox = new Mesh(geometry, material)
+    material.onBeforeCompile = shader => {
+      shader.uniforms.playhead = { value: 0 }
 
-    this.shadedBox.scale.x = 4
-    this.shadedBox.scale.y = 4
-    this.shadedBox.scale.z = 4
+      shader.fragmentShader = `
+        uniform float playhead;
+      ` + shader.fragmentShader
 
-    this.shadedBox.position.x = 5
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <logdepthbuf_fragment>',
+        `
+          vec3 colorA = vec3(0.5, 0.5, 0.5);
+          vec3 colorB = vec3(0.5, 0.5, 0.5);
+          vec3 colorC = vec3(2.0, 1.0, 0.);
+          vec3 colorD = vec3(0.5, 0.2, 0.25);
 
-    this.scene.add(this.shadedBox)
+          float diff = dot(vec3(1.0), vNormal);
+          vec3 color = colorA + colorB * cos(2. * 3.141592 * (colorC * diff + colorD + playhead));
+
+          diffuseColor.rgb = color;
+        ` + '#include <logdepthbuf_fragment>'
+      )
+
+      material.userData.shader = shader
+    }
+
+    return material
   }
 
-  /**
-   * Load a 3D model and append it to the scene
-   */
-  _loadModel() {
-    return new Promise(resolve => {
-      this.loader = new GLTFLoader()
+  _createHelicoid() {
+    const material = this._getMaterial()
 
-      const dracoLoader = new DRACOLoader()
-      dracoLoader.setDecoderPath('/')
+    const helicoidVector = new Vector3()
+    function Helicoid(u, v, helicoidVector) {
+      const alpha = Math.PI*2*(u - 0.5)
+      const theta = Math.PI*2*(v - 0.5)
+      const dividend = 1 + Math.cosh(alpha) * Math.cosh(theta)
+      const t = 1.5
 
-      this.loader.setDRACOLoader(dracoLoader)
+      const x = Math.sinh(theta) * Math.cos(t * alpha) / dividend
+      const z = Math.sinh(theta) * Math.sin(t * alpha) / dividend
+      const y = 1.5  * Math.cosh(theta) * Math.sinh(alpha) / dividend
 
-      this.loader.load('./model.glb', gltf => {
-        const mesh = gltf.scene.children[0]
+      helicoidVector.set(x, y, z)
+    }
+    const geometry = new ParametricBufferGeometry(Helicoid, 100, 100)
 
-        mesh.scale.x = 4
-        mesh.scale.y = 4
-        mesh.scale.z = 4
+    this.helicoid = new Mesh(geometry, material)
 
-        mesh.position.z = 5
+    this.helicoid.castShadow = this.helicoid.receiveShadow = true
 
-        const material = new ShaderMaterial({
-          vertexShader: require('./shaders/sample.vertex.glsl'),
-          fragmentShader: require('./shaders/sample.fragment.glsl'),
-          transparent: true,
-          wireframe: true
-        })
+    this.scene.add(this.helicoid)
+  }
 
-        mesh.material = material
+  _createSpheres() {
+    const geom = new IcosahedronBufferGeometry(0.23, 5)
 
-        this.scene.add(mesh)
+    this.ball1 = new Mesh(geom, this._getMaterial())
+    this.ball2 = new Mesh(geom, this._getMaterial())
 
-        resolve()
-      })
-    })
+    this.ball1.castShadow = this.ball1.receiveShadow = true
+    this.ball2.castShadow = this.ball2.receiveShadow = true
+
+    this.scene.add(this.ball1)
+    this.scene.add(this.ball2)
   }
 
   _createControls() {
@@ -186,53 +214,44 @@ class App {
     })
 
     /**
-     * Box configuration
+     * Ambient Light configuration
      */
-    const boxFolder = this.pane.addFolder({ title: 'Box' })
-
-    params = { width: 4, height: 4, depth: 4, metalness: 0.5, roughness: 0.5 }
-
-    boxFolder.addInput(params, 'width', { label: 'Width', min: 1, max: 8 })
-      .on('change', value => {
-        this.box.scale.x = value
-        this.shadedBox.scale.x = value
-      })
-
-    boxFolder.addInput(params, 'height', { label: 'Height', min: 1, max: 8 })
-      .on('change', value => {
-        this.box.scale.y = value
-        this.shadedBox.scale.y = value
-      })
-
-    boxFolder.addInput(params, 'depth', { label: 'Depth', min: 1, max: 8 })
-      .on('change', value => {
-        this.box.scale.z = value
-        this.shadedBox.scale.z = value
-      })
-
-    boxFolder.addInput(params, 'metalness', { label: 'Metallic', min: 0, max: 1 })
-      .on('change', value => this.box.material.metalness = value)
-
-    boxFolder.addInput(params, 'roughness', { label: 'Roughness', min: 0, max: 1 })
-      .on('change', value => this.box.material.roughness = value)
-
-    /**
-     * Light configuration
-     */
-    const lightFolder = this.pane.addFolder({ title: 'Light' })
+    const ambientLightFolder = this.pane.addFolder({ title: 'Ambient Light' })
 
     params = {
-      color: { r: 255, g: 0, b: 85 },
-      intensity: 500
+      color: { r: 255, g: 255, b: 255 },
+      intensity: 4
     }
 
-    lightFolder.addInput(params, 'color', { label: 'Color' }).on('change', value => {
-      this.pointLight.color = new Color(`rgb(${parseInt(value.r)}, ${parseInt(value.g)}, ${parseInt(value.b)})`)
+    ambientLightFolder.addInput(params, 'color', { label: 'Color' }).on('change', value => {
+      this.ambientLight.color = new Color(`rgb(${parseInt(value.r)}, ${parseInt(value.g)}, ${parseInt(value.b)})`)
     })
 
-    lightFolder.addInput(params, 'intensity', { label: 'Intensity', min: 0, max: 1000 }).on('change', value => {
-      this.pointLight.intensity = value
+    ambientLightFolder.addInput(params, 'intensity', { label: 'Intensity', min: 0, max: 10 }).on('change', value => {
+      this.ambientLight.intensity = value
     })
+
+    /**
+     * Directional Light configuration
+     */
+    const directionalLightFolder = this.pane.addFolder({ title: 'Directional Light' })
+
+    params = {
+      color: { r: 255, g: 255, b: 255 },
+      intensity: 1
+    }
+
+    directionalLightFolder.addInput(params, 'color', { label: 'Color' }).on('change', value => {
+      this.directionalLight.color = new Color(`rgb(${parseInt(value.r)}, ${parseInt(value.g)}, ${parseInt(value.b)})`)
+    })
+
+    directionalLightFolder.addInput(params, 'intensity', { label: 'Intensity', min: 0, max: 10 }).on('change', value => {
+      this.directionalLight.intensity = value
+    })
+  }
+
+  _createClock() {
+    this.clock = new Clock()
   }
 
   _addListeners() {
